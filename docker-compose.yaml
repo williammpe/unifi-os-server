@@ -1,0 +1,44 @@
+services:
+  unifi-os-server:
+    container_name: unifi-os-server
+    image: uosserver:${UOS_SERVER_VERSION}
+    build:
+      context: .
+      args:
+        - UOS_SERVER_VERSION=${UOS_SERVER_VERSION}
+    privileged: true
+    restart: always
+    stop_signal: SIGRTMIN+3
+
+    env_file:
+      - .env
+    ports:
+      - "11443:443"
+      - "8443:8443"
+      - "8080:8080"
+      - "3478:3478/udp"
+      - "10001:10001/udp"
+      - "10003:10003/udp"
+    volumes:
+      - ${DATA_PATH}/data:/data
+      - /lib/modules:/lib/modules:ro
+      - /etc/localtime:/etc/localtime:ro
+      - ./uos-entrypoint.sh:/root/uos-entrypoint.sh:ro
+      - ${DATA_PATH}/persistent:/persistent
+      - ${DATA_PATH}/srv:/srv
+      - ${DATA_PATH}/var-lib-unifi:/var/lib/unifi
+      - ${DATA_PATH}/var-lib-mongodb:/var/lib/mongodb
+      - ${DATA_PATH}/etc-rabbitmq-ssl:/etc/rabbitmq/ssl
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+      - /var/run/postgresql
+    environment:
+      - TZ=America/Sao_Paulo
+      - container=docker
+    networks:
+      - unifi-net
+networks:
+  unifi-net:
+    driver: bridge

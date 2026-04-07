@@ -1,0 +1,14 @@
+# Environment
+.env
+
+# Persistent data
+unifi-data/
+
+# Extracted firmware
+unifi-os-image/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
