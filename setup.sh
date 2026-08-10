@@ -22,15 +22,23 @@ else
 fi
 
 ########################################
-# Variáveis
+# Validações
 ########################################
 
-WORK_DIR="./unifi-os-image"
-FIRMWARE_DIR="$WORK_DIR/firmware"
-EXTRACT_DIR="$WORK_DIR/extract"
+if [ -z "$UOS_SERVER_VERSION" ]; then
+    echo "[ERRO] UOS_SERVER_VERSION não definido no .env!"
+    exit 1
+fi
 
-FW_FILE="$FIRMWARE_DIR/unifi-os-$UOS_SERVER_VERSION"
-IMAGE_TAR="$EXTRACT_DIR/image.tar"
+if [ -z "$INSTALLER_URL_AMD64" ] && [ -z "$INSTALLER_URL_ARM64" ]; then
+    echo "[ERRO] Defina INSTALLER_URL_AMD64 e/ou INSTALLER_URL_ARM64 no .env!"
+    exit 1
+fi
+
+if [ -z "$UOS_SYSTEM_IP" ]; then
+    echo "[ERRO] UOS_SYSTEM_IP não definido no .env! (IP público/do host usado pelo UniFi)"
+    exit 1
+fi
 
 FINAL_IMAGE="uosserver:$UOS_SERVER_VERSION"
 
@@ -38,106 +46,39 @@ log "Versão do UniFi OS: $UOS_SERVER_VERSION"
 log "Imagem final: $FINAL_IMAGE"
 
 ########################################
-# 1. Verificar imagem docker
+# 1. Build da imagem (download + extração do firmware acontecem
+#    dentro do Dockerfile, sem necessidade de binwalk/sudo no host)
 ########################################
 
-log "Etapa 1/3: Verificando se a imagem Docker já existe..."
+log "Etapa 1/3: Buildando imagem Docker (isso baixa e extrai o firmware oficial)..."
 
-if [[ "$(docker images -q $FINAL_IMAGE 2> /dev/null)" == "" ]]; then
+docker compose build
 
-    log "Imagem não encontrada. Iniciando processo de build..."
-
-    mkdir -p "$FIRMWARE_DIR" "$EXTRACT_DIR"
-
-    ########################################
-    # Download firmware
-    ########################################
-
-    if [ ! -f "$FW_FILE" ]; then
-        log "Firmware não encontrado localmente."
-        log "Baixando firmware..."
-
-        curl -L -o "$FW_FILE" "$URL_FIRMWARE"
-
-        log "Download concluído."
-    else
-        log "Firmware já existente."
-    fi
-
-    ########################################
-    # Extração firmware
-    ########################################
-
-    if [ ! -f "$IMAGE_TAR" ]; then
-
-        log "Extraindo firmware..."
-
-        sudo binwalk -e "$FW_FILE" --directory "$EXTRACT_DIR" --run-as=root > /dev/null
-
-        log "Procurando image.tar dentro do firmware..."
-
-        FOUND_TAR=$(sudo find "$EXTRACT_DIR" -name "image.tar" | head -n 1)
-
-        if [ -z "$FOUND_TAR" ]; then
-            echo "[ERRO] image.tar não encontrado após extração!"
-            exit 1
-        fi
-
-        log "image.tar encontrado: $FOUND_TAR"
-
-        sudo mv "$FOUND_TAR" "$IMAGE_TAR"
-        sudo chown $(id -u):$(id -g) "$IMAGE_TAR"
-
-        log "Firmware extraído com sucesso."
-
-    else
-        log "image.tar já existente."
-    fi
-
-    ########################################
-    # Docker load
-    ########################################
-
-    log "Carregando imagem Docker..."
-
-    LOAD_OUTPUT=$(docker load -i "$IMAGE_TAR")
-
-    RAW_REF=$(echo "$LOAD_OUTPUT" | sed 's/Loaded image: //')
-
-    log "Imagem carregada: $RAW_REF"
-
-    docker tag "$RAW_REF" "$FINAL_IMAGE"
-
-    log "Imagem marcada como: $FINAL_IMAGE"
-
-else
-
-    log "Imagem Docker já existente. Pulando build."
-
-fi
+log "Build concluído: $FINAL_IMAGE"
 
 ########################################
-# 2. Preparar volume
+# 2. Preparar volumes
 ########################################
 
-log "Etapa 2/3: Preparando volume persistente..."
+log "Etapa 2/3: Preparando volumes persistentes..."
 
-mkdir -p "$DATA_PATH"
+mkdir -p "$DATA_PATH/uos" "$DATA_PATH/data" "$DATA_PATH/mongodb"
 
-log "Volume criado/verificado: $DATA_PATH"
+log "Volumes criados/verificados em: $DATA_PATH"
 
 ########################################
 # 3. Subir container
 ########################################
 
-log "Etapa 3/3: Iniciando container..."
+log "Etapa 3/3: Iniciando containers..."
 
 docker compose up -d --remove-orphans
 
-log "Container iniciado com sucesso."
+log "Containers iniciados com sucesso."
 
 echo
 echo "============================================================"
 echo "        UniFi OS Server iniciado com sucesso"
+echo "        Acesse: https://localhost:11443"
 echo "============================================================"
 echo

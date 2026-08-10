@@ -6,39 +6,75 @@ services:
       context: .
       args:
         - UOS_SERVER_VERSION=${UOS_SERVER_VERSION}
-    privileged: true
-    restart: always
+        - INSTALLER_URL_AMD64=${INSTALLER_URL_AMD64}
+        - INSTALLER_URL_ARM64=${INSTALLER_URL_ARM64}
+    cgroup: host
+    restart: unless-stopped
     stop_signal: SIGRTMIN+3
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
 
     env_file:
       - .env
     ports:
-      - "11443:443"
-      - "8443:8443"
-      - "8080:8080"
-      - "3478:3478/udp"
-      - "10001:10001/udp"
-      - "10003:10003/udp"
+      - "8080:8080" # HTTP inform / redirect
+      - "8443:8443" # UniFi Controller API
+      - "8444:8444" # Secure Portal para Hotspot
+      - "8880-8882:8880-8882" # Redirecionamento do portal Hotspot (HTTP)
+      - "10003:10003/udp" # Descoberta UniFi (necessário só na rede local)
+      - "11443:443" # UniFi Web UI (HTTPS)
+      - "3478:3478/udp" # STUN usado para poking de dispositivos
+      - "10001:10001/udp" # Descoberta UniFi (legado)
+      - "5514:5514/udp" # Syslog
+      - "6789:6789" # Speed test
+
+      # Bypass da Network App — pula o SSO do UOS, acesso direto à API do
+      # controller em 127.0.0.1:8081. Vincular só a localhost; nunca expor.
+      - "127.0.0.1:7443:7443"
+      - "127.0.0.1:5432:5432" # PostgreSQL (apenas localhost)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
     volumes:
-      - ${DATA_PATH}/data:/data
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - /lib/modules:/lib/modules:ro
       - /etc/localtime:/etc/localtime:ro
-      - ./uos-entrypoint.sh:/root/uos-entrypoint.sh:ro
-      - ${DATA_PATH}/persistent:/persistent
-      - ${DATA_PATH}/srv:/srv
-      - ${DATA_PATH}/var-lib-unifi:/var/lib/unifi
-      - ${DATA_PATH}/var-lib-mongodb:/var/lib/mongodb
-      - ${DATA_PATH}/etc-rabbitmq-ssl:/etc/rabbitmq/ssl
+      - ${DATA_PATH}/uos:/var/lib/uosserver
+      - ${DATA_PATH}/uos:/var/lib/unifi
+      - ${DATA_PATH}/data:/data
     tmpfs:
-      - /run
+      - /run:exec
       - /run/lock
-      - /tmp
-      - /var/run/postgresql
-    environment:
-      - TZ=America/Sao_Paulo
-      - container=docker
+      - /tmp:exec
+      - /var/lib/journal
+      - /var/opt/unifi/tmp:size=64m
+      - /data/unifi-core/config/http
     networks:
       - unifi-net
+    depends_on:
+      - unifi-os-server-mongodb
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      UOS_SYSTEM_IP: ${UOS_SYSTEM_IP}
+      # Bypass de SSO para a Network App (porta 7443). Usado para debug e
+      # acesso direto à API. NÃO usar em produção — a porta é vinculada
+      # a localhost acima e deve permanecer assim.
+      EXPOSE_NETWORK_APP: ${EXPOSE_NETWORK_APP:-false}
+
+      MONGO_INTERNAL: ${MONGO_INTERNAL:-false} # Padrão false → usa o serviço de MongoDB externo abaixo.
+      # Defina "true" e remova o serviço unifi-os-server-mongodb + depends_on
+      # para deixar a UniFi Network App rodar seu próprio mongod (porta 27117).
+
+  unifi-os-server-mongodb:
+    container_name: unifi-os-server-mongodb
+    image: mongo:4.4
+    restart: unless-stopped
+    networks:
+      - unifi-net
+    volumes:
+      - ${DATA_PATH}/mongodb:/data/db
+
 networks:
   unifi-net:
     driver: bridge

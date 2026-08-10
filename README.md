@@ -6,24 +6,24 @@
 
 Run **UniFi OS Server** inside a Docker container using the official firmware distributed by Ubiquiti.
 
-This project automatically:
+The build is fully self-contained inside the `Dockerfile`: it downloads the
+official installer, extracts the embedded OCI image with `binwalk`, flattens
+its layers into a rootfs, and layers a custom entrypoint on top. No manual
+extraction on the host is required — `setup.sh` only orchestrates
+`docker compose build` + `docker compose up -d`.
 
-* downloads the official firmware
-* extracts the internal system image
-* imports it into Docker
-* launches a fully functional UniFi OS environment
-
-Compatible with Linux and macOS hosts.
+Compatible with Linux and macOS hosts (amd64/arm64).
 
 ---
 
 # Features
 
-✔ Uses **official firmware**
-✔ Full persistent storage
-✔ Automatic firmware extraction
+✔ Uses **official firmware**, extracted entirely inside the Docker build
+✔ Full persistent storage (UniFi config + external MongoDB)
+✔ Automatic firmware download & extraction (no host `binwalk`/`sudo` needed)
 ✔ Simple one-command install
-✔ Clean Docker architecture
+✔ macvlan `eth0` alias, PostgreSQL exposure, journal forwarding to `docker logs`
+✔ Optional direct Network App access, bypassing UOS SSO (debug only)
 
 Runs the complete **UniFi OS environment**, including the **UniFi Network Application**.
 
@@ -35,15 +35,12 @@ Install:
 
 * Docker
 * Docker Compose
-* curl
-* binwalk
-* sudo
-
-Example (Debian / Ubuntu):
 
 ```
-sudo apt install docker.io docker-compose curl binwalk
+sudo apt install docker.io docker-compose-plugin
 ```
+
+`binwalk`/`jq`/`p7zip` run **inside** the build stage — you don't need them on the host.
 
 ---
 
@@ -55,12 +52,11 @@ sudo apt install docker.io docker-compose curl binwalk
 ├── example.env
 ├── docker-compose.yaml
 ├── Dockerfile
-├── build.sh
+├── setup.sh
 ├── uos-entrypoint.sh
+├── site-localhost-bypass.conf
 ├── .gitignore
-└── unifi-os-image/
-    ├── firmware/
-    └── extract/
+└── volume-data/            # created at runtime (persistent data)
 ```
 
 ---
@@ -78,27 +74,33 @@ Edit `.env`:
 ```
 UOS_SERVER_VERSION=5.0.6
 
-URL_FIRMWARE=https://fw-download.ubnt.com/data/unifi-os-server/...
+INSTALLER_URL_AMD64=https://fw-download.ubnt.com/data/unifi-os-server/...
+INSTALLER_URL_ARM64=
 
-DATA_PATH=./unifi-data
+UOS_SYSTEM_IP=203.0.113.10      # public/host IP used by UniFi (required)
+
+TZ=America/Sao_Paulo
+EXPOSE_NETWORK_APP=false        # true = bypass SSO on 127.0.0.1:7443 (debug only)
+MONGO_INTERNAL=false            # false = use the external MongoDB service
+
+DATA_PATH=./volume-data
 ```
 
 ---
 
 # Install
 
-Run the build script:
+Run the setup script:
 
 ```
-./build.sh
+./setup.sh
 ```
 
 This will:
 
-1. download firmware
-2. extract system image
-3. load Docker image
-4. start container
+1. build the image (download firmware + extract system image, all inside Docker)
+2. create the persistent volume folders
+3. start the containers (`unifi-os-server` + `unifi-os-server-mongodb`)
 
 ---
 
@@ -120,44 +122,32 @@ https://SERVER_IP:11443
 
 # Ports
 
-| Port      | Service          |
-| --------- | ---------------- |
-| 11443     | UniFi OS Web     |
-| 8443      | UniFi Controller |
-| 8080      | Device Inform    |
-| 3478/udp  | STUN             |
-| 10001/udp | Discovery        |
-| 10003/udp | Discovery        |
+| Port             | Service                              |
+| ---------------- | ------------------------------------- |
+| 11443            | UniFi OS Web UI                       |
+| 8443              | UniFi Controller API                  |
+| 8444              | Secure Portal (Hotspot)               |
+| 8080              | Device Inform / HTTP redirect         |
+| 8880-8882         | Hotspot portal redirection (HTTP)     |
+| 3478/udp          | STUN                                  |
+| 10001/udp, 10003/udp | Discovery                          |
+| 5514/udp          | Syslog                                |
+| 6789              | Speed test                            |
+| 127.0.0.1:7443    | Network App bypass (debug, SSO-free)  |
+| 127.0.0.1:5432    | PostgreSQL (localhost only)           |
 
 ---
 
 # Persistent Data
 
-All data is stored inside:
+All data is stored inside `DATA_PATH`:
 
 ```
-DATA_PATH
+volume-data
+├── uos           # UniFi config, certs, users (/var/lib/unifi)
+├── data           # UOS core data (/data)
+└── mongodb        # external MongoDB database
 ```
-
-Structure:
-
-```
-unifi-data
-├── data
-├── persistent
-├── srv
-├── var-lib-unifi
-├── var-lib-mongodb
-└── etc-rabbitmq-ssl
-```
-
-Includes:
-
-* configuration
-* users
-* MongoDB database
-* PostgreSQL database
-* certificates
 
 ---
 
@@ -169,10 +159,10 @@ View container logs:
 docker logs -f unifi-os-server
 ```
 
-View system logs:
+View system logs (forwarded from journald):
 
 ```
-docker exec -it unifi-os-server journalctl -f
+docker logs -f unifi-os-server
 ```
 
 ---
@@ -183,12 +173,13 @@ Edit `.env`:
 
 ```
 UOS_SERVER_VERSION=NEW_VERSION
+INSTALLER_URL_AMD64=NEW_URL
 ```
 
 Then run:
 
 ```
-./build.sh
+./setup.sh
 ```
 
 ---
@@ -205,13 +196,10 @@ Persistent data will remain intact.
 
 # Troubleshooting
 
-### Firmware extraction fails
+### Build fails downloading the installer
 
-Make sure `binwalk` is installed:
-
-```
-sudo apt install binwalk
-```
+Check `INSTALLER_URL_AMD64`/`INSTALLER_URL_ARM64` in `.env` — they must point
+to a valid `fw-download.ubnt.com` installer for your architecture.
 
 ---
 
@@ -222,6 +210,8 @@ Check logs:
 ```
 docker logs unifi-os-server
 ```
+
+Make sure `UOS_SYSTEM_IP` is set in `.env`.
 
 ---
 
@@ -235,7 +225,8 @@ Edit `docker-compose.yaml` and change the port mapping.
 
 This project is **not affiliated with Ubiquiti**.
 
-It only automates usage of publicly available firmware.
+It only automates usage of publicly available firmware. Build architecture
+adapted from [unihosted/unifi-os-server-docker](https://github.com/unihosted/unifi-os-server-docker).
 
 Use at your own risk.
 

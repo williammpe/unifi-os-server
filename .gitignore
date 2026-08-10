@@ -3,9 +3,7 @@
 
 # Persistent data
 unifi-data/
-
-# Extracted firmware
-unifi-os-image/
+volume-data/
 
 # macOS
 .DS_Store
